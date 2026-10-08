@@ -1,0 +1,68 @@
+@host = http://localhost:5100
+
+### Service description and endpoint list
+GET {{host}}/
+Accept: application/json
+
+### Health probe
+GET {{host}}/health
+Accept: application/json
+
+### Happy path: publish one order and watch the full chain in the consumer logs
+# orders -> shipments -> deliveries, plus a notification at each stage.
+POST {{host}}/api/orders
+Content-Type: application/json
+
+{
+  "customerId": "CUST-001",
+  "customerName": "Alice Johnson",
+  "currency": "USD",
+  "items": [
+    { "productId": "PROD-101", "productName": "Wireless Headphones", "quantity": 1, "unitPrice": 199.99 },
+    { "productId": "PROD-205", "productName": "USB-C Cable (3-pack)", "quantity": 2, "unitPrice": 25.00 }
+  ]
+}
+
+### Transient failure: fails twice, then the retry succeeds on attempt 3
+POST {{host}}/api/orders
+Content-Type: application/json
+
+{
+  "customerId": "CUST-FLAKY",
+  "customerName": "Retry Demo",
+  "currency": "USD",
+  "items": [
+    { "productId": "PROD-312", "productName": "Mechanical Keyboard", "quantity": 1, "unitPrice": 59.95 }
+  ]
+}
+
+### Permanent failure: exhausts all retries, logs PROCESSING ABANDONED, skips the message
+POST {{host}}/api/orders
+Content-Type: application/json
+
+{
+  "customerId": "CUST-FAIL",
+  "customerName": "Abandon Demo",
+  "currency": "USD",
+  "items": [
+    { "productId": "PROD-666", "productName": "Cursed Widget", "quantity": 1, "unitPrice": 13.13 }
+  ]
+}
+
+### Validation failure: empty item list is rejected with 400 before anything is published
+POST {{host}}/api/orders
+Content-Type: application/json
+
+{
+  "customerId": "CUST-002",
+  "customerName": "Bob Martinez",
+  "currency": "USD",
+  "items": []
+}
+
+### Bulk publish: builds lag and spreads keys across all 3 partitions
+POST {{host}}/api/orders/bulk?count=30
+
+### Committed offsets, high watermarks and lag per partition (written to the API logs)
+GET {{host}}/api/kafka/offsets
+Accept: application/json

@@ -1,0 +1,145 @@
+# OrderFlow — event-driven order pipeline on Apache Kafka.
+#
+#   docker compose up -d --build                      full stack, one consumer
+#   docker compose up -d --build --scale consumer=3   three consumers in one group
+#
+# Ports on the host: 9092 Kafka, 5100 producer API, 8080 Kafka UI.
+
+# Pinned so container and volume names stay "orderflow_*" regardless of the folder
+# this repository happens to sit in.
+name: orderflow
+
+services:
+  # ── Cluster coordination ───────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: orderflow-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── The broker ─────────────────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: orderflow-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      # Host-facing listener, so you can run the services from the IDE too.
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+
+      # Two listeners for two audiences: containers on this network reach the broker
+      # as kafka:29092, processes on the host reach it as localhost:9092. Without the
+      # split, a host client gets handed an unreachable internal hostname.
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      # Single-broker cluster, so every replication factor must be 1.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+      # Off on purpose: auto-created topics get a single partition, which would defeat
+      # the partition and consumer-group demos. KafkaTopicInitializer creates them
+      # explicitly with 3 partitions instead.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+      KAFKA_LOG_RETENTION_HOURS: 24
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  # ── Producer: HTTP in, events out ──────────────────────────────────────────
+  producer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: producer
+    image: orderflow-producer:latest
+    container_name: orderflow-producer
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "5100:8080"
+    environment:
+      # Double underscore maps onto the Kafka:* configuration section.
+      Kafka__BootstrapServers: kafka:29092
+      Kafka__GroupId: order-processing-group
+      Kafka__TopicPartitions: 3
+      Kafka__TopicReplicationFactor: 1
+      ASPNETCORE_ENVIRONMENT: Production
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ── Consumer: one consumer group, scale it to watch partitions rebalance ───
+  # No container_name and no host ports, which is what allows --scale.
+  consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: consumer
+    image: orderflow-consumer:latest
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      Kafka__BootstrapServers: kafka:29092
+
+      # Every replica shares this group id, so the 3 partitions of each topic are
+      # divided between them and each event is processed once by the group.
+      Kafka__GroupId: order-processing-group
+
+      Kafka__EnableAutoCommit: "false"
+      Kafka__AutoOffsetReset: earliest
+      Kafka__MaxRetryAttempts: 3
+      Kafka__RetryBaseDelayMs: 1000
+      Kafka__RetryMaxDelayMs: 10000
+      DOTNET_ENVIRONMENT: Production
+    # Kafka rebalances on its own when an instance leaves, so a restart is always safe.
+    restart: unless-stopped
+
+  # ── Browser UI for topics, messages, partitions, groups and lag ─────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: orderflow-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      DYNAMIC_CONFIG_ENABLED: "true"
+
+volumes:
+  kafka-data:
+  zookeeper-data:
+  zookeeper-log:

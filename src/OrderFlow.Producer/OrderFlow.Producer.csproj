@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!--
+    No Microsoft.AspNetCore.OpenApi reference on purpose: every published version of its
+    Microsoft.OpenApi dependency currently carries advisory GHSA-v5pm-xwqc-g5wc. The API
+    surface is documented in OrderFlow.Producer.http and docs/ARCHITECTURE.md instead.
+  -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\OrderFlow.Contracts\OrderFlow.Contracts.csproj" />
+    <ProjectReference Include="..\OrderFlow.Shared\OrderFlow.Shared.csproj" />
+  </ItemGroup>
+
+</Project>

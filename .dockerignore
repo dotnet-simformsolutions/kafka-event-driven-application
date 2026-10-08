@@ -1,0 +1,18 @@
+# Build artefacts must never enter the build context: they bloat it and can leak
+# host-specific binaries into the image.
+**/bin/
+**/obj/
+**/.vs/
+**/.vscode/
+**/.idea/
+
+# Docker + git metadata
+**/Dockerfile
+**/.dockerignore
+.git/
+.gitignore
+
+# Docs and local tooling
+**/*.md
+**/*.http
+docs/
